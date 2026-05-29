@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:shendure.curve.space)",
+      "Bash(python3 -c \"import pandas as pd; df = pd.read_parquet\\('/Users/shendure/Dropbox/claude/240_analysis/output/enhancers/enhancers_Hepatocytes.parquet'\\); print\\(df.shape\\); print\\(df.dtypes\\); print\\(df.head\\(\\)\\)\")",
+      "Bash(zcat /Users/shendure/Dropbox/claude/240_analysis/output/enhancers/steam_enhancers_hg38.bed.gz)",
+      "Bash(gunzip -c /Users/shendure/Dropbox/claude/240_analysis/output/enhancers/steam_enhancers_hg38.bed.gz)",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -sLI \"https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup/jax_atac_augmented_241_mammals_core_enhancer/\")",
+      "Bash(curl -sL \"https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup/jax_atac_augmented_241_mammals_core_enhancer/\")",
+      "Bash(curl -sL \"https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup/jax_atac_augmented_241_mammals_core_enhancer/Acinonyx_jubatus.core_region.bed.gz\" -o /tmp/test_sp.bed.gz)",
+      "Read(//tmp/**)",
+      "Bash(gunzip -c /tmp/test_sp.bed.gz)",
+      "Bash(curl -sL \"https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup/\")",
+      "Bash(curl -sL \"https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup/jax_atac_augmented_241_mammals/\")",
+      "Bash(curl -sL \"https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup/jax_atac_augmented_241_mammals/Acinonyx_jubatus/\")",
+      "Bash(python3 -c \"import pandas, numpy, matplotlib, pyBigWig, ete3, Bio.Phylo, requests\")",
+      "Bash(python3 -c \"import pandas, numpy, matplotlib, requests; print\\('basics OK'\\)\")",
+      "Bash(python3 -c \"import pyBigWig; print\\('pyBigWig:', pyBigWig.__version__ if hasattr\\(pyBigWig,'__version__'\\) else 'OK'\\)\")",
+      "Bash(python3 -c \"from Bio import Phylo; print\\('biopython:', __import__\\('Bio'\\).__version__\\)\")",
+      "Bash(python3 -c \"import jupyter; print\\('jupyter ok'\\)\")",
+      "Bash(python3 -c \"import nbformat; print\\('nbformat ok'\\)\")",
+      "Bash(pip install *)",
+      "Bash(python3 -c \"import nbformat; print\\('nbformat:', nbformat.__version__\\)\")",
+      "Bash(python3 *)",
+      "Bash(curl -sL https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup/__TRACKED_VAR__/)",
+      "Bash(curl -sL \"https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup/jax_atac_augmented_241_mammals_hg38/genomes.txt\")",
+      "Bash(curl -sL \"https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup/jax_atac_augmented_241_mammals_hg38/hub.txt\")",
+      "Bash(curl -sL \"https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup/jax_atac_augmented_241_mammals_hg38/hg38/\")",
+      "Bash(curl -sL \"https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup/jax_atac_augmented_241_mammals_hg38/hg38/Bos_taurus/\")",
+      "Bash(curl -sL \"https://shendure.curve.space/articles/evolutionary-transfer-learning\" -o /tmp/etl_article.html)",
+      "Bash(gh api *)",
+      "Bash(gh auth *)",
+      "Bash(/Users/shendure/Dropbox/HAL/hal/bin/halStats --tree /Users/shendure/Downloads/Zoonomia/241-mammalian-2020v2.hal)",
+      "Bash(echo \"exit=$?\")"
+    ]
+  }
+}

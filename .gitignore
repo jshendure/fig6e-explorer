@@ -1,0 +1,13 @@
+cache/
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+.streamlit/secrets.toml
+fig6e_*.png
+fig6e_*.pdf
+*.npz
+*.pkl
+.DS_Store
+.venv/
+venv/

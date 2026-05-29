@@ -1,0 +1,343 @@
+"""Core logic for the STEAM-v1 Fig 6e per-coordinate viewer.
+
+Pure Python module — no Streamlit dependency. Used by `app.py` and (optionally)
+the notebook. All functions take their parameters explicitly; no module globals
+encode the current query.
+"""
+from __future__ import annotations
+
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Callable, Optional
+
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import requests
+
+mpl.rcParams['font.family'] = 'sans-serif'
+mpl.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
+mpl.rcParams['pdf.fonttype'] = 42
+
+try:
+    import pyBigWig
+except ImportError as e:
+    raise RuntimeError('pyBigWig required: pip install pyBigWig') from e
+
+try:
+    from Bio import Phylo
+    HAVE_BIO = True
+except ImportError:
+    HAVE_BIO = False
+
+
+# --- constants ---------------------------------------------------------------
+
+BASE = 'https://shendure-web.gs.washington.edu/content/members/cxqiu/public/nobackup'
+HG38_BW_FMT = BASE + '/jax_atac_augmented_241_mammals_hg38/hg38/{species}/{species}.{cell_type}.bw'
+HG38_BW_DIR = BASE + '/jax_atac_augmented_241_mammals_hg38/hg38/'
+
+CELL_TYPES = [
+    'Adipocyte_cells', 'Adipocyte_cells_Cyp2e1', 'B_cells',
+    'Brain_capillary_endothelial_cells', 'CNS_neurons', 'Cardiomyocytes',
+    'Corticofugal_neurons', 'Endocardial_cells', 'Endothelium',
+    'Epithelial_cells', 'Erythroid_cells', 'Eye', 'Glia',
+    'Glomerular_endothelial_cells', 'Gut_epithelial_cells', 'Hepatocytes',
+    'Intermediate_neuronal_progenitors', 'Kidney',
+    'Lateral_plate_and_intermediate_mesoderm',
+    'Liver_sinusoidal_endothelial_cells', 'Lung_and_airway',
+    'Lymphatic_vessel_endothelial_cells', 'Melanocyte_cells', 'Mesoderm',
+    'Neural_crest_PNS_neurons', 'Neuroectoderm_and_glia',
+    'Olfactory_ensheathing_cells', 'Olfactory_neurons', 'Oligodendrocytes',
+    'Skeletal_muscle_cells', 'T_cells', 'White_blood_cells',
+]
+
+VIRIDIS_FLOOR = '#440154'
+
+REPO_ROOT = Path(__file__).resolve().parent
+SPECIES_INDEX_CACHE = REPO_ROOT / 'cache' / 'species_list.txt'
+TREE_PATH_DEFAULT = REPO_ROOT / 'data' / 'zoonomia_241.nwk'
+
+
+# --- species list ------------------------------------------------------------
+
+def list_species(refresh: bool = False) -> list[str]:
+    SPECIES_INDEX_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    if SPECIES_INDEX_CACHE.exists() and not refresh:
+        return SPECIES_INDEX_CACHE.read_text().split()
+    html = requests.get(HG38_BW_DIR, timeout=60).text
+    sp = sorted({m for m in re.findall(r'href="([A-Z][A-Za-z_]+)/"', html)})
+    SPECIES_INDEX_CACHE.write_text('\n'.join(sp))
+    return sp
+
+
+# --- per-species hg38-projected signal fetch ---------------------------------
+
+def _fetch_one(species: str, chrom: str, start: int, end: int,
+               cell_type: str, n_bins: int) -> Optional[np.ndarray]:
+    url = HG38_BW_FMT.format(species=species, cell_type=cell_type)
+    try:
+        bw = pyBigWig.open(url)
+    except Exception:
+        return None
+    try:
+        chroms = bw.chroms()
+        if chrom not in chroms:
+            return None
+        end_eff = min(end, chroms[chrom])
+        if end_eff <= start:
+            return None
+        vals = bw.stats(chrom, start, end_eff, type='mean', nBins=n_bins)
+    except Exception:
+        return None
+    finally:
+        bw.close()
+    return np.array([np.nan if v is None else v for v in vals], dtype=float)
+
+
+def fetch_signals(chrom: str, pos: int, cell_type: str,
+                  window_kb: float = 100.0, bin_kb: float = 0.1,
+                  species_list: Optional[list[str]] = None,
+                  max_workers: int = 32,
+                  progress: Optional[Callable[[int, int], None]] = None,
+                  ) -> dict[str, np.ndarray]:
+    """Fetch hg38-projected `mean` signal in `bin_kb`-sized bins for each species.
+
+    Returns dict {species: 1D array of length n_bins}, dropping species that
+    have no data at the locus.
+    """
+    if species_list is None:
+        species_list = list_species()
+    window_bp = int(window_kb * 1000)
+    bin_bp = bin_kb * 1000
+    n_bins = int(round(2 * window_bp / bin_bp))
+    start = max(0, int(pos) - window_bp)
+    end = int(pos) + window_bp
+
+    out: dict[str, np.ndarray] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(_fetch_one, sp, chrom, start, end, cell_type, n_bins): sp
+                for sp in species_list}
+        done = 0
+        for fut in as_completed(futs):
+            sp = futs[fut]
+            arr = fut.result()
+            if arr is not None and arr.shape == (n_bins,):
+                out[sp] = arr
+            done += 1
+            if progress is not None:
+                progress(done, len(futs))
+    return out
+
+
+# --- synteny proxy -----------------------------------------------------------
+
+def contiguous_span_bins(arr: np.ndarray, max_gap_bins: int) -> int:
+    fin = np.isfinite(arr)
+    best = cur = gap = 0
+    for v in fin:
+        if v:
+            cur += 1
+            gap = 0
+        else:
+            gap += 1
+            cur = cur + 1 if gap <= max_gap_bins else 0
+        best = max(best, cur)
+    return best
+
+
+def compute_synteny(signals: dict[str, np.ndarray], bin_bp: float,
+                    max_gap_kb: float = 10.0) -> pd.DataFrame:
+    max_gap_bins = int(round(max_gap_kb * 1000 / bin_bp))
+    rows = []
+    for sp, arr in signals.items():
+        rows.append({
+            'species': sp,
+            'syntenic_span_kb': contiguous_span_bins(arr, max_gap_bins) * bin_bp / 1000,
+            'coverage_frac': float(np.isfinite(arr).mean()),
+            'mean_signal': float(np.nanmean(arr)) if np.isfinite(arr).any() else np.nan,
+        })
+    return pd.DataFrame(rows).sort_values('syntenic_span_kb', ascending=False)
+
+
+# --- tree --------------------------------------------------------------------
+
+def ladderize(clade, reverse: bool = True) -> None:
+    for c in clade.clades:
+        ladderize(c, reverse)
+    clade.clades.sort(key=lambda c: c.count_terminals(), reverse=reverse)
+
+
+def load_pruned_tree(retained_species: list[str],
+                     tree_path: Path = TREE_PATH_DEFAULT):
+    if not (HAVE_BIO and tree_path.exists()):
+        return list(retained_species), None
+    tree = Phylo.read(str(tree_path), 'newick')
+    keep = set(retained_species)
+    for t in [t for t in tree.get_terminals() if t.name not in keep]:
+        tree.prune(t)
+    ladderize(tree.root, reverse=True)
+    order = [t.name for t in tree.get_terminals()]
+    order += [s for s in retained_species if s not in order]
+    return order, tree
+
+
+def abbreviate_species(name: str) -> str:
+    parts = name.split('_')
+    return f'{parts[0][0]}. ' + ' '.join(parts[1:]) if len(parts) >= 2 else name
+
+
+def _tree_node_coords(tree):
+    leaves = tree.get_terminals()
+    leaf_y = {id(l): i for i, l in enumerate(leaves)}
+    xs, ys = {}, {}
+
+    def depth(clade, x0):
+        x = x0 + (clade.branch_length or 0.0)
+        xs[id(clade)] = x
+        if clade.is_terminal():
+            ys[id(clade)] = leaf_y[id(clade)]
+        else:
+            for c in clade.clades:
+                depth(c, x)
+            ys[id(clade)] = float(np.mean([ys[id(c)] for c in clade.clades]))
+
+    depth(tree.root, 0.0)
+    return xs, ys
+
+
+def _draw_rect_tree(ax_tree, ax_lab, tree, species_order, fontsize, highlight=()):
+    n = len(species_order)
+    xs, ys = _tree_node_coords(tree)
+    xmax = max(xs.values())
+
+    def seg(clade):
+        x0 = xs[id(clade)] - (clade.branch_length or 0.0)
+        ax_tree.plot([x0, xs[id(clade)]], [ys[id(clade)], ys[id(clade)]],
+                     color='black', lw=0.4, solid_capstyle='butt')
+        if not clade.is_terminal():
+            cy = [ys[id(c)] for c in clade.clades]
+            ax_tree.plot([xs[id(clade)], xs[id(clade)]], [min(cy), max(cy)],
+                         color='black', lw=0.4, solid_capstyle='butt')
+            for c in clade.clades:
+                seg(c)
+
+    seg(tree.root)
+    hl = set(highlight)
+    for clade in tree.get_terminals():
+        y = ys[id(clade)]
+        ax_tree.plot([xs[id(clade)], xmax], [y, y], color='0.88', lw=0.2, zorder=0)
+        ax_lab.text(0.98, y, abbreviate_species(clade.name), va='center', ha='right',
+                    fontsize=fontsize, style='italic',
+                    color=('#d62728' if clade.name in hl else 'black'))
+    for a in (ax_tree, ax_lab):
+        a.set_ylim(n - 0.5, -0.5)
+        a.axis('off')
+    ax_tree.set_xlim(0, xmax)
+    ax_lab.set_xlim(0, 1)
+
+
+# --- plot --------------------------------------------------------------------
+
+def plot_fig6e(species_order: list[str],
+               signals: dict[str, np.ndarray],
+               tree_obj,
+               *,
+               anchor_label: str,
+               anchor_chrom: str,
+               anchor_pos: int,
+               cell_type: str,
+               window_kb: float,
+               show_all_species: bool,
+               min_syntenic_kb: float,
+               score_vmax_pct: float = 99.5,
+               highlight_species=(),
+               calls: Optional[pd.DataFrame] = None):
+    n = len(species_order)
+    if n == 0:
+        fig = plt.figure(figsize=(6, 2))
+        fig.text(0.5, 0.5, 'No species to plot.', ha='center', va='center')
+        return fig
+
+    have_tree = tree_obj is not None
+    have_dots = (calls is not None) and (not calls.empty)
+    fontsize = float(np.clip(560 / max(n, 1), 2.0, 7.0))
+
+    mat = np.vstack([signals[s] for s in species_order])
+    coverage = np.isfinite(mat).mean(axis=0)
+    strength = np.nansum(mat, axis=0)
+    strength = strength / strength.max() if strength.max() > 0 else strength
+    xgrid = np.linspace(-window_kb, window_kb, mat.shape[1])
+
+    base_h = max(6.0, n * 0.085)
+    track_h = 0.75
+    col_w = ([1.0, 0.9] if have_tree else []) + [3.0]
+    fig_w = sum(col_w) * 1.55
+    fig = plt.figure(figsize=(fig_w, base_h + 2 * track_h + 1.2))
+    gs = fig.add_gridspec(3, len(col_w), width_ratios=col_w,
+                          height_ratios=[track_h, track_h, base_h],
+                          wspace=0.02, hspace=0.18)
+    heat_col = len(col_w) - 1
+
+    def style_track(axx, ylabel):
+        axx.set_xlim(-window_kb, window_kb)
+        axx.set_ylim(0, 1)
+        axx.set_xticks([])
+        axx.set_yticks([0, 1])
+        axx.tick_params(labelsize=6, length=2)
+        axx.set_ylabel(ylabel, fontsize=6, rotation=0, ha='right', va='center')
+        axx.spines[['top', 'right']].set_visible(False)
+
+    ax_cov = fig.add_subplot(gs[0, heat_col])
+    ax_cov.fill_between(xgrid, coverage, color='0.6', lw=0)
+    ax_cov.plot(xgrid, coverage, color='black', lw=0.7)
+    style_track(ax_cov, 'synteny\n(frac.\nspecies)')
+    syn_note = 'all species' if show_all_species else f'syntenic ≥{min_syntenic_kb:g} kb'
+    ax_cov.set_title(
+        f'{anchor_label}  {anchor_chrom}:{anchor_pos:,}   '
+        f'{cell_type}, ±{window_kb:g} kb, {n} species ({syn_note})',
+        fontsize=9, pad=16,
+    )
+
+    ax_str = fig.add_subplot(gs[1, heat_col], sharex=ax_cov)
+    ax_str.fill_between(xgrid, strength, color='#2a788e', lw=0)
+    ax_str.plot(xgrid, strength, color='#15616d', lw=0.7)
+    style_track(ax_str, 'summed\nstrength\n(norm.)')
+
+    if have_tree:
+        ax_tree = fig.add_subplot(gs[2, 0])
+        ax_lab = fig.add_subplot(gs[2, 1])
+        _draw_rect_tree(ax_tree, ax_lab, tree_obj, species_order, fontsize,
+                        highlight_species)
+
+    ax = fig.add_subplot(gs[2, heat_col], sharex=ax_cov)
+    masked = np.ma.masked_invalid(mat)
+    cmap = plt.cm.viridis.copy()
+    cmap.set_bad(VIRIDIS_FLOOR)
+    finite = mat[np.isfinite(mat)]
+    vmax = np.percentile(finite, score_vmax_pct) if finite.size else 1.0
+    ax.set_facecolor(VIRIDIS_FLOOR)
+    im = ax.imshow(masked, aspect='auto', cmap=cmap, vmin=0, vmax=vmax,
+                   extent=[-window_kb, window_kb, n - 0.5, -0.5],
+                   interpolation='nearest')
+    if have_dots:
+        yidx = {s: i for i, s in enumerate(species_order)}
+        d = calls[calls['species'].isin(yidx)]
+        ax.scatter(d['rel_pos'] / 1000.0, d['species'].map(yidx),
+                   s=10, facecolor='none', edgecolor='red', linewidths=0.5)
+    ax.set_yticks([])
+    ax.set_xlabel(f'distance from {anchor_label} (kb)', fontsize=9)
+    ax.tick_params(labelsize=8)
+
+    if have_tree:
+        cb_holder = fig.add_subplot(gs[0:2, 0])
+        cb_holder.axis('off')
+        cax = cb_holder.inset_axes([0.12, 0.45, 0.85, 0.10])
+    else:
+        cax = ax.inset_axes([0.0, 1.04, 0.32, 0.02])
+    cb = fig.colorbar(im, cax=cax, orientation='horizontal')
+    cb.set_label('STEAM-v1 score', fontsize=7, labelpad=2)
+    cb.ax.tick_params(labelsize=6, length=2)
+    return fig

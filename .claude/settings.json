@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gunzip -c *)",
+      "Bash(curl -sSL *)",
+      "Bash(curl -sI *)",
+      "Bash(curl -s *)",
+      "Bash(curl -sL *)",
+      "Bash(zcat *)",
+      "Bash(pdftotext -layout *)"
+    ]
+  }
+}
