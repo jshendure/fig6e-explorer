@@ -11,3 +11,4 @@ fig6e_*.pdf
 .DS_Store
 .venv/
 venv/
+.claude/settings.local.json
