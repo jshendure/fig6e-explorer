@@ -35,7 +35,7 @@ OUT_PARQUET = REPO / 'data' / 'tf_window_sums.parquet'
 PARTIAL_DIR = REPO / 'cache' / 'tf_sums_partial'
 PARTIAL_DIR.mkdir(parents=True, exist_ok=True)
 
-WINDOW_KB = 50
+WINDOW_KB = 25
 N_SPECIES = 30
 MAX_WORKERS = 48
 
