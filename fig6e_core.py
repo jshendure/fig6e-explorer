@@ -320,7 +320,7 @@ def plot_fig6e(species_order: list[str],
                window_kb: float,
                show_all_species: bool,
                min_syntenic_kb: float,
-               score_vmax_pct: float = 99.5,
+               score_vmax: float = 30.0,
                highlight_species=(),
                calls: Optional[pd.DataFrame] = None,
                anchor_strand: Optional[str] = None):
@@ -386,8 +386,7 @@ def plot_fig6e(species_order: list[str],
     masked = np.ma.masked_invalid(mat)
     cmap = plt.cm.viridis.copy()
     cmap.set_bad(VIRIDIS_FLOOR)
-    finite = mat[np.isfinite(mat)]
-    vmax = np.percentile(finite, score_vmax_pct) if finite.size else 1.0
+    vmax = float(score_vmax)
     ax.set_facecolor(VIRIDIS_FLOOR)
     im = ax.imshow(masked, aspect='auto', cmap=cmap, vmin=0, vmax=vmax,
                    extent=[-window_kb, window_kb, n - 0.5, -0.5],
@@ -421,6 +420,7 @@ def plot_fig6e(species_order: list[str],
     else:
         cax = ax.inset_axes([0.0, 1.04, 0.32, 0.02])
     cb = fig.colorbar(im, cax=cax, orientation='horizontal')
-    cb.set_label('STEAM-v1 score', fontsize=7, labelpad=2)
+    cb.set_label('STEAM-v1 phred-like score', fontsize=7, labelpad=2)
+    cb.set_ticks([t for t in (0, 10, 20, 30, 40, 50) if t <= vmax + 1e-9])
     cb.ax.tick_params(labelsize=6, length=2)
     return fig
