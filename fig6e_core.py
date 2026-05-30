@@ -210,6 +210,34 @@ def ladderize(clade, reverse: bool = True) -> None:
     clade.clades.sort(key=lambda c: c.count_terminals(), reverse=reverse)
 
 
+def tree_leaf_order(tree_path: Path = TREE_PATH_DEFAULT,
+                    restrict_to: Optional[set[str]] = None) -> list[str]:
+    """Ladderized leaf order of the Zoonomia tree, optionally restricted to a species set."""
+    if not (HAVE_BIO and tree_path.exists()):
+        return [] if restrict_to is None else sorted(restrict_to)
+    tree = Phylo.read(str(tree_path), 'newick')
+    ladderize(tree.root, reverse=True)
+    leaves = [t.name for t in tree.get_terminals()]
+    if restrict_to is not None:
+        leaves = [n for n in leaves if n in restrict_to]
+    return leaves
+
+
+def subsample_evenly(species_pool: list[str], n: int,
+                     must_include: tuple[str, ...] = ()) -> list[str]:
+    """Pick ~n species evenly along the given order; always keep any must_include present."""
+    if n >= len(species_pool):
+        return list(species_pool)
+    step = len(species_pool) / n
+    picked = [species_pool[min(int(i * step), len(species_pool) - 1)] for i in range(n)]
+    picked = list(dict.fromkeys(picked))  # de-dup, preserve order
+    must = [s for s in must_include if s in species_pool and s not in picked]
+    # Insert must-includes at their tree-order position
+    pool_idx = {s: i for i, s in enumerate(species_pool)}
+    picked = sorted(set(picked) | set(must), key=lambda s: pool_idx[s])
+    return picked
+
+
 def load_pruned_tree(retained_species: list[str],
                      tree_path: Path = TREE_PATH_DEFAULT):
     if not (HAVE_BIO and tree_path.exists()):

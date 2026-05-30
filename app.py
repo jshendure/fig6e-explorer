@@ -61,6 +61,11 @@ with st.sidebar:
         'Cell type', core.CELL_TYPES, index=core.CELL_TYPES.index('Hepatocytes'),
     )
     window_kb = st.slider('Window (± kb)', 25, 500, 100, step=25)
+    n_species = st.select_slider(
+        'Species to fetch (fewer = faster)',
+        options=[30, 60, 120, 'All (239)'], value='All (239)',
+        help='Subsampled evenly along the Zoonomia phylogeny; highlighted species are always kept.',
+    )
 
     st.divider()
     show_all = st.toggle(
@@ -80,9 +85,10 @@ with st.sidebar:
 
 
 @st.cache_data(max_entries=20, show_spinner=False, ttl=24 * 3600)
-def cached_signals(chrom: str, pos: int, cell_type: str, window_kb: float):
-    """In-memory cache keyed by (chrom, pos, cell_type, window_kb). Returns dict[str, np.ndarray]."""
-    species = core.list_species()
+def cached_signals(chrom: str, pos: int, cell_type: str, window_kb: float,
+                   species_tuple: tuple):
+    """Cache key: (chrom, pos, cell_type, window_kb, species set)."""
+    species = list(species_tuple)
     prog = st.progress(0.0, text=f'Fetching 0/{len(species)} per-species hg38 tracks…')
 
     def cb(done, total):
@@ -91,7 +97,7 @@ def cached_signals(chrom: str, pos: int, cell_type: str, window_kb: float):
     sig = core.fetch_signals(
         chrom, pos, cell_type,
         window_kb=window_kb, bin_kb=0.1,
-        species_list=species, max_workers=32,
+        species_list=species, max_workers=64,
         progress=cb,
     )
     prog.empty()
@@ -126,8 +132,20 @@ if mode == 'Gene symbol':
     )
 
 with st.status('Loading…', expanded=False) as status:
-    status.update(label='Pulling per-species hg38 tracks…')
-    signals = cached_signals(chrom, int(pos), cell_type, float(window_kb))
+    status.update(label='Picking species subset…')
+    all_species = set(core.list_species())
+    species_in_tree_order = core.tree_leaf_order(restrict_to=all_species)
+    highlight = [s.strip() for s in highlight_str.split(',') if s.strip()]
+    if n_species == 'All (239)':
+        species_to_fetch = species_in_tree_order
+    else:
+        species_to_fetch = core.subsample_evenly(
+            species_in_tree_order, int(n_species),
+            must_include=tuple(s for s in highlight if s in all_species),
+        )
+    status.update(label=f'Pulling {len(species_to_fetch)} per-species hg38 tracks…')
+    signals = cached_signals(chrom, int(pos), cell_type, float(window_kb),
+                             tuple(species_to_fetch))
     status.update(label='Computing synteny + ordering by phylogeny…')
     syn = core.compute_synteny(signals, bin_bp=100.0, max_gap_kb=10.0)
     if show_all:
@@ -135,7 +153,6 @@ with st.status('Loading…', expanded=False) as status:
     else:
         retained = syn[syn['syntenic_span_kb'] >= min_syn]['species'].tolist()
     order, tree = core.load_pruned_tree(retained)
-    highlight = [s.strip() for s in highlight_str.split(',') if s.strip()]
     status.update(label='Rendering figure…')
     fig = core.plot_fig6e(
         order, signals, tree,
