@@ -31,13 +31,32 @@ st.caption(
 
 CHROMS = [f'chr{i}' for i in list(range(1, 23)) + ['X', 'Y']]
 
+@st.cache_data(max_entries=200, show_spinner=False, ttl=24 * 3600)
+def cached_gene_lookup(symbol: str):
+    return core.lookup_gene_tss(symbol)
+
+
 with st.sidebar:
     st.header('Query')
-    chrom = st.selectbox('Chromosome (hg38)', CHROMS, index=CHROMS.index('chr4'))
-    pos = st.number_input(
-        'Position (hg38, 1-based bp)', min_value=1, value=73436824, step=1, format='%d',
+    mode = st.radio(
+        'Look up by:', ['Gene symbol', 'Coordinate'], horizontal=True,
+        help='Gene symbol → canonical TSS from Ensembl (hg38). '
+             'Coordinate → exact hg38 position you provide.',
     )
-    label = st.text_input('Locus label', value='AFP_TSS', max_chars=40)
+
+    if mode == 'Gene symbol':
+        gene_sym = st.text_input(
+            'Gene symbol (HGNC, e.g. GATA4, AFP, FOXP3)', value='GATA4', max_chars=40,
+        ).strip().upper()
+        chrom, pos, label = None, None, None  # resolved on Generate
+    else:
+        chrom = st.selectbox('Chromosome (hg38)', CHROMS, index=CHROMS.index('chr4'))
+        pos = st.number_input(
+            'Position (hg38, 1-based bp)', min_value=1, value=73436824, step=1, format='%d',
+        )
+        label = st.text_input('Locus label', value='AFP_TSS', max_chars=40)
+        gene_sym = None
+
     cell_type = st.selectbox(
         'Cell type', core.CELL_TYPES, index=core.CELL_TYPES.index('Hepatocytes'),
     )
@@ -88,6 +107,24 @@ if not run:
     st.stop()
 
 t0 = time.time()
+
+if mode == 'Gene symbol':
+    if not gene_sym:
+        st.error('Enter a gene symbol.')
+        st.stop()
+    try:
+        info = cached_gene_lookup(gene_sym)
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
+    chrom = info['chrom']
+    pos = info['tss']
+    label = f"{info['gene_name']}_TSS"
+    st.info(
+        f"**{info['gene_name']}** → `{chrom}:{pos:,}` "
+        f"({info['strand']} strand, {info['biotype']}, Ensembl `{info['ensembl_id']}`)"
+    )
+
 with st.status('Loading…', expanded=False) as status:
     status.update(label='Pulling per-species hg38 tracks…')
     signals = cached_signals(chrom, int(pos), cell_type, float(window_kb))

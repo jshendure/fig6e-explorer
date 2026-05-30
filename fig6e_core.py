@@ -61,6 +61,46 @@ SPECIES_INDEX_CACHE = REPO_ROOT / 'cache' / 'species_list.txt'
 TREE_PATH_DEFAULT = REPO_ROOT / 'data' / 'zoonomia_241.nwk'
 
 
+# --- gene symbol -> hg38 TSS (Ensembl REST) ----------------------------------
+
+ENSEMBL_LOOKUP = 'https://rest.ensembl.org/lookup/symbol/homo_sapiens/{symbol}'
+
+
+def lookup_gene_tss(symbol: str, timeout: float = 15.0) -> dict:
+    """Resolve a human gene symbol to its hg38 TSS via Ensembl REST.
+
+    Returns a dict with keys: chrom (str, with 'chr' prefix), tss (int, 1-based),
+    strand ('+' or '-'), gene_name, ensembl_id, biotype, start, end.
+    Raises ValueError if the symbol is unknown.
+    """
+    symbol = symbol.strip()
+    if not symbol:
+        raise ValueError('Empty gene symbol.')
+    r = requests.get(
+        ENSEMBL_LOOKUP.format(symbol=symbol),
+        headers={'Accept': 'application/json'},
+        timeout=timeout,
+    )
+    if r.status_code in (400, 404):
+        raise ValueError(f'Gene symbol "{symbol}" not found in Ensembl (human).')
+    r.raise_for_status()
+    d = r.json()
+    seq = d['seq_region_name']
+    chrom = seq if seq.startswith('chr') else f'chr{seq}'
+    strand = d['strand']  # 1 or -1
+    tss = int(d['start']) if strand == 1 else int(d['end'])
+    return {
+        'chrom': chrom,
+        'tss': tss,
+        'strand': '+' if strand == 1 else '-',
+        'gene_name': d.get('display_name', symbol),
+        'ensembl_id': d.get('id'),
+        'biotype': d.get('biotype'),
+        'start': int(d['start']),
+        'end': int(d['end']),
+    }
+
+
 # --- species list ------------------------------------------------------------
 
 def list_species(refresh: bool = False) -> list[str]:
