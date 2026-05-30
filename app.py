@@ -38,15 +38,20 @@ def cached_gene_lookup(symbol: str):
 
 with st.sidebar:
     st.header('Query')
+    if 'mode' not in st.session_state:
+        st.session_state['mode'] = 'Gene symbol'
     mode = st.radio(
-        'Look up by:', ['Gene symbol', 'Coordinate'], horizontal=True,
+        'Look up by:', ['Gene symbol', 'Coordinate'], horizontal=True, key='mode',
         help='Gene symbol → canonical TSS from Ensembl (hg38). '
              'Coordinate → exact hg38 position you provide.',
     )
 
     if mode == 'Gene symbol':
+        if 'gene_sym_val' not in st.session_state:
+            st.session_state['gene_sym_val'] = 'GATA4'
         gene_sym = st.text_input(
-            'Gene symbol (HGNC, e.g. GATA4, AFP, FOXP3)', value='GATA4', max_chars=40,
+            'Gene symbol (HGNC, e.g. GATA4, AFP, FOXP3)', max_chars=40,
+            key='gene_sym_val',
         ).strip().upper()
         chrom, pos, label = None, None, None  # resolved on Generate
     else:
@@ -82,6 +87,38 @@ with st.sidebar:
     )
 
     run = st.button('Generate figure', type='primary', use_container_width=True)
+
+    # --- Top-TFs quick picker ---
+    @st.cache_data(show_spinner=False)
+    def _load_top10():
+        import pandas as pd, pathlib
+        p = pathlib.Path('data/tf_top10_per_celltype.tsv')
+        return pd.read_csv(p, sep='\t') if p.exists() else None
+
+    _top = _load_top10()
+    if _top is not None:
+        sub = _top[_top['cell_type'] == cell_type].sort_values('rank').head(10)
+        with st.expander(f'💡 Top TFs in {cell_type} (click to render)', expanded=False):
+            st.caption(
+                'Per-TF specificity = average across 30 phylogenetically-spread '
+                'species of (fraction of total accessibility at the TF locus in this '
+                'cell type). Click any to switch the gene symbol + render.'
+            )
+            for _, row in sub.iterrows():
+                if st.button(
+                    f"{int(row['rank'])}. {row['tf_symbol']}  "
+                    f"(frac {row['rank_score']:.3f}, τ {row['mean_tau']:.2f})",
+                    key=f"toptf_{cell_type}_{row['tf_symbol']}",
+                    use_container_width=True,
+                ):
+                    st.session_state['gene_sym_val'] = row['tf_symbol']
+                    st.session_state['mode'] = 'Gene symbol'
+                    st.session_state['auto_run'] = True
+                    st.rerun()
+
+# Honour auto_run requested by Top-TFs picker.
+if st.session_state.pop('auto_run', False):
+    run = True
 
 
 @st.cache_data(max_entries=20, show_spinner=False, ttl=24 * 3600)
