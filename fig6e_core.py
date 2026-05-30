@@ -322,7 +322,8 @@ def plot_fig6e(species_order: list[str],
                min_syntenic_kb: float,
                score_vmax_pct: float = 99.5,
                highlight_species=(),
-               calls: Optional[pd.DataFrame] = None):
+               calls: Optional[pd.DataFrame] = None,
+               anchor_strand: Optional[str] = None):
     n = len(species_order)
     if n == 0:
         fig = plt.figure(figsize=(6, 2))
@@ -341,12 +342,13 @@ def plot_fig6e(species_order: list[str],
 
     base_h = max(6.0, n * 0.085)
     track_h = 0.75
-    col_w = ([1.0, 0.9] if have_tree else []) + [3.0]
-    fig_w = sum(col_w) * 1.55
-    fig = plt.figure(figsize=(fig_w, base_h + 2 * track_h + 1.2))
+    # Narrow label column (just wider than longest tip label); near-zero wspace.
+    col_w = ([1.0, 0.45] if have_tree else []) + [3.0]
+    fig_w = sum(col_w) * 1.7
+    fig = plt.figure(figsize=(fig_w, base_h + 2 * track_h + 1.0))
     gs = fig.add_gridspec(3, len(col_w), width_ratios=col_w,
                           height_ratios=[track_h, track_h, base_h],
-                          wspace=0.02, hspace=0.18)
+                          wspace=0.01, hspace=0.05)
     heat_col = len(col_w) - 1
 
     def style_track(axx, ylabel):
@@ -395,6 +397,19 @@ def plot_fig6e(species_order: list[str],
         d = calls[calls['species'].isin(yidx)]
         ax.scatter(d['rel_pos'] / 1000.0, d['species'].map(yidx),
                    s=10, facecolor='none', edgecolor='red', linewidths=0.5)
+
+    # TSS / anchor marker
+    ax.axvline(0, color='white', lw=0.7, ls=':', alpha=0.8)
+    from matplotlib.transforms import blended_transform_factory
+    trans = blended_transform_factory(ax.transData, ax.transAxes)
+    arrow_len_kb = max(8.0, window_kb * 0.12)
+    if anchor_strand in ('+', '-'):
+        dx = arrow_len_kb if anchor_strand == '+' else -arrow_len_kb
+        ax.annotate('', xy=(dx, 1.015), xytext=(0, 1.015), xycoords=trans,
+                    arrowprops=dict(arrowstyle='-|>', color='black',
+                                    lw=0.9, mutation_scale=8), annotation_clip=False)
+    ax.scatter([0], [1.015], transform=trans, marker='|', s=30, color='black',
+               linewidths=1.2, clip_on=False, zorder=5)
     ax.set_yticks([])
     ax.set_xlabel(f'distance from {anchor_label} (kb)', fontsize=9)
     ax.tick_params(labelsize=8)

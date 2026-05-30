@@ -113,6 +113,7 @@ if not run:
     st.stop()
 
 t0 = time.time()
+anchor_strand = None
 
 if mode == 'Gene symbol':
     if not gene_sym:
@@ -125,7 +126,8 @@ if mode == 'Gene symbol':
         st.stop()
     chrom = info['chrom']
     pos = info['tss']
-    label = f"{info['gene_name']}_TSS"
+    label = info['gene_name']
+    anchor_strand = info['strand']
     st.info(
         f"**{info['gene_name']}** → `{chrom}:{pos:,}` "
         f"({info['strand']} strand, {info['biotype']}, Ensembl `{info['ensembl_id']}`)"
@@ -161,6 +163,7 @@ with st.status('Loading…', expanded=False) as status:
         cell_type=cell_type, window_kb=float(window_kb),
         show_all_species=show_all, min_syntenic_kb=float(min_syn),
         highlight_species=highlight,
+        anchor_strand=anchor_strand,
     )
     status.update(label=f'Done in {time.time() - t0:.1f} s', state='complete')
 
