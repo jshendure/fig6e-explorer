@@ -80,20 +80,7 @@ with st.sidebar:
         options=[30, 60, 120, 'All (239)'], value=30,
         help='Subsampled evenly along the Zoonomia phylogeny; highlighted species are always kept.',
     )
-    if view_mode == 'Cell-type cross-section':
-        norm_choice = st.radio(
-            'Heatmap normalisation',
-            ['Column z-score', 'Column residual', 'Global max',
-             'Per row', 'Per row → per column'],
-            index=0,
-            help=('Column residual (recommended): at each position subtract the column '
-                  'mean — surfaces cell-type-specific excess. Column z-score: same idea, '
-                  'divided by column std. Global max: preserves cross-cell-type '
-                  'magnitudes. Per row: each row scaled to its own max. Per row → per '
-                  'column: row-equalize then column-normalise.'),
-        )
-    else:
-        norm_choice = 'Per row'
+    norm_choice = 'Column residual'
 
     st.divider()
     show_all = st.toggle(
