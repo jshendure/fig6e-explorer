@@ -547,7 +547,7 @@ def plot_celltype_view(cell_types: list[str], mat: np.ndarray, coverage: np.ndar
         fontsize=9, pad=12,
     )
 
-    # --- 32 × N_BINS heatmap (raw signal, fixed phred-like vmax) ---
+    # --- 32 × N_BINS heatmap (per-row-normalised sums) ---
     ax = fig.add_subplot(gs[1], sharex=ax_cov)
     cmap = plt.cm.viridis.copy()
     cmap.set_bad(VIRIDIS_FLOOR)
