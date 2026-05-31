@@ -174,10 +174,17 @@ def fetch_signals_multi_ct(chrom: str, pos: int, cell_types: list[str],
 
 def aggregate_celltype_matrix(signals: dict[tuple, np.ndarray],
                               species_list: list[str],
-                              cell_types: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    """Per (cell_type, bin): un-phred each species' value to a linear prediction score
-    (``10**(phred/10)``), sum across species (NaN → 0), then divide the whole matrix by
-    its global max so values are in [0, 1].
+                              cell_types: list[str],
+                              normalisation: str = 'per_row',
+                              ) -> tuple[np.ndarray, np.ndarray]:
+    """Per (cell_type, bin): sum the raw STEAM-v1 prediction scores across species
+    (NaN → 0), then normalise.
+
+    ``normalisation``:
+      - 'per_row'  (default): each cell-type row is divided by its own max → reveals
+        cell-type-specific patterns; rows are not comparable in magnitude.
+      - 'global':  whole matrix divided by global max → preserves cross-cell-type
+        magnitudes, but strong broad peaks can dim narrower cell-type-specific peaks.
 
     Returns (normalised matrix shape (n_ct, n_bins), per-bin synteny coverage shape (n_bins,)).
     """
@@ -189,14 +196,16 @@ def aggregate_celltype_matrix(signals: dict[tuple, np.ndarray],
         ci = ct_index.get(ct)
         if ci is None:
             continue
-        # Linearise phred-like score back to an "original prediction" scale, then sum;
-        # NaN bins contribute zero (no synteny → no contribution).
-        with np.errstate(invalid='ignore', over='ignore'):
-            lin = np.where(np.isfinite(arr), np.power(10.0, arr / 10.0), 0.0)
-        sums[ci] += lin
+        # Raw STEAM-v1 prediction; NaN bins contribute zero (no synteny → no contribution).
+        sums[ci] += np.where(np.isfinite(arr), arr, 0.0)
 
-    mx = sums.max()
-    norm_mat = sums / mx if mx > 0 else sums
+    if normalisation == 'per_row':
+        row_max = sums.max(axis=1, keepdims=True)
+        row_max = np.where(row_max > 0, row_max, 1.0)
+        norm_mat = sums / row_max
+    else:  # 'global'
+        mx = sums.max()
+        norm_mat = sums / mx if mx > 0 else sums
 
     # Synteny coverage per bin: fraction of species with hg38 data, averaged over cell types.
     per_sp_cov = {}
@@ -493,7 +502,7 @@ def plot_fig6e(species_order: list[str],
     else:
         cax = ax.inset_axes([0.0, 1.04, 0.32, 0.02])
     cb = fig.colorbar(im, cax=cax, orientation='horizontal')
-    cb.set_label('STEAM-v1 phred-like score', fontsize=7, labelpad=2)
+    cb.set_label('STEAM-v1 prediction score', fontsize=7, labelpad=2)
     cb.set_ticks([t for t in (0, 10, 20, 30, 40, 50) if t <= vmax + 1e-9])
     cb.ax.tick_params(labelsize=6, length=2)
     return fig
@@ -533,7 +542,8 @@ def plot_celltype_view(cell_types: list[str], mat: np.ndarray, coverage: np.ndar
     ax_cov.set_title(
         f'{anchor_label}  {anchor_chrom}:{anchor_pos:,}   '
         f'cell-type cross-section, ±{window_kb:g} kb '
-        f'(normalised sum of 10^(phred/10) over {n_species_used} species)',
+        f'(sum of STEAM-v1 prediction scores across {n_species_used} species, '
+        f'normalised per cell-type row)',
         fontsize=9, pad=12,
     )
 
