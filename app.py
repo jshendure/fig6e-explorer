@@ -77,7 +77,7 @@ with st.sidebar:
     window_kb = st.slider('Window (± kb)', 25, 500, 100, step=25)
     n_species = st.select_slider(
         'Species to fetch (fewer = faster)',
-        options=[30, 60, 120, 'All (239)'], value=30,
+        options=[32, 64, 128, 'All (239)'], value=32,
         help='Subsampled evenly along the Zoonomia phylogeny; highlighted species are always kept.',
     )
     norm_choice = 'Column residual'
