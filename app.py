@@ -64,7 +64,7 @@ with st.sidebar:
         pos = st.number_input(
             'Position (hg38, 1-based bp)', min_value=1, value=73436824, step=1, format='%d',
         )
-        label = st.text_input('Locus label', value='AFP_TSS', max_chars=40)
+        label = f'{chrom}:{int(pos):,}'  # auto-derived; reflects current coords
         gene_sym = None
 
     if view_mode == 'Per-species (locus)':
