@@ -118,6 +118,13 @@ with st.sidebar:
         p = pathlib.Path('data/tf_top10_per_celltype.tsv')
         return pd.read_csv(p, sep='\t') if p.exists() else None
 
+    def _pick_top_tf(tf: str):
+        # Callback fires BEFORE widgets are re-instantiated on the next rerun,
+        # so it's safe to write to widget-backed session_state keys here.
+        st.session_state['gene_sym_val'] = tf
+        st.session_state['mode'] = 'Gene symbol'
+        st.session_state['auto_run'] = True
+
     _top = _load_top10()
     if _top is not None:
         sub = _top[_top['cell_type'] == cell_type].sort_values('rank').head(10)
@@ -128,16 +135,14 @@ with st.sidebar:
                 'cell type). Click any to switch the gene symbol + render.'
             )
             for _, row in sub.iterrows():
-                if st.button(
+                st.button(
                     f"{int(row['rank'])}. {row['tf_symbol']}  "
                     f"(frac {row['rank_score']:.3f}, τ {row['mean_tau']:.2f})",
                     key=f"toptf_{cell_type}_{row['tf_symbol']}",
                     use_container_width=True,
-                ):
-                    st.session_state['gene_sym_val'] = row['tf_symbol']
-                    st.session_state['mode'] = 'Gene symbol'
-                    st.session_state['auto_run'] = True
-                    st.rerun()
+                    on_click=_pick_top_tf,
+                    args=(row['tf_symbol'],),
+                )
 
 # Honour auto_run requested by Top-TFs picker.
 if st.session_state.pop('auto_run', False):
