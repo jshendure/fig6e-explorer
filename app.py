@@ -77,9 +77,21 @@ with st.sidebar:
     window_kb = st.slider('Window (± kb)', 25, 500, 100, step=25)
     n_species = st.select_slider(
         'Species to fetch (fewer = faster)',
-        options=[30, 60, 120, 'All (239)'], value='All (239)',
+        options=[30, 60, 120, 'All (239)'], value=30,
         help='Subsampled evenly along the Zoonomia phylogeny; highlighted species are always kept.',
     )
+    if view_mode == 'Cell-type cross-section':
+        norm_choice = st.radio(
+            'Heatmap normalisation',
+            ['Per row', 'Per row → per column', 'Per column → per row', 'Global max'],
+            index=1,
+            help=('Per row: each cell-type row scaled to [0,1] by its own max — shows '
+                  'each cell type\'s pattern. Per row → per column: two-stage, '
+                  'highlights which cell type dominates each position. Global max: '
+                  'preserves cross-cell-type magnitudes.'),
+        )
+    else:
+        norm_choice = 'Per row'
 
     st.divider()
     show_all = st.toggle(
@@ -219,10 +231,21 @@ with st.status('Loading…', expanded=False) as status:
             tuple(species_to_fetch), tuple(core.CELL_TYPES),
         )
         status.update(label='Aggregating per cell type…')
+        norm_map = {'Per row': 'per_row',
+                    'Per row → per column': 'row_then_col',
+                    'Per column → per row': 'col_then_row',
+                    'Global max': 'global'}
         mat_ct, coverage = core.aggregate_celltype_matrix(
             signals_mc, list(species_to_fetch), list(core.CELL_TYPES),
+            normalisation=norm_map[norm_choice],
         )
         status.update(label='Rendering figure…')
+        norm_label_map = {
+            'per_row': 'per cell-type row',
+            'row_then_col': 'per row, then per column',
+            'col_then_row': 'per column, then per row',
+            'global': 'by global max',
+        }
         fig = core.plot_celltype_view(
             list(core.CELL_TYPES), mat_ct, coverage,
             anchor_label=label or f'{chrom}_{pos}',
@@ -230,6 +253,7 @@ with st.status('Loading…', expanded=False) as status:
             window_kb=float(window_kb),
             n_species_used=len(species_to_fetch),
             anchor_strand=anchor_strand,
+            normalisation_label=norm_label_map[norm_map[norm_choice]],
         )
         syn = None
     else:

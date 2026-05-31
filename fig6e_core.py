@@ -203,6 +203,20 @@ def aggregate_celltype_matrix(signals: dict[tuple, np.ndarray],
         row_max = sums.max(axis=1, keepdims=True)
         row_max = np.where(row_max > 0, row_max, 1.0)
         norm_mat = sums / row_max
+    elif normalisation == 'row_then_col':
+        row_max = sums.max(axis=1, keepdims=True)
+        row_max = np.where(row_max > 0, row_max, 1.0)
+        m1 = sums / row_max
+        col_max = m1.max(axis=0, keepdims=True)
+        col_max = np.where(col_max > 0, col_max, 1.0)
+        norm_mat = m1 / col_max
+    elif normalisation == 'col_then_row':
+        col_max = sums.max(axis=0, keepdims=True)
+        col_max = np.where(col_max > 0, col_max, 1.0)
+        m1 = sums / col_max
+        row_max = m1.max(axis=1, keepdims=True)
+        row_max = np.where(row_max > 0, row_max, 1.0)
+        norm_mat = m1 / row_max
     else:  # 'global'
         mx = sums.max()
         norm_mat = sums / mx if mx > 0 else sums
@@ -512,7 +526,8 @@ def plot_celltype_view(cell_types: list[str], mat: np.ndarray, coverage: np.ndar
                        *,
                        anchor_label: str, anchor_chrom: str, anchor_pos: int,
                        window_kb: float, n_species_used: int,
-                       anchor_strand: Optional[str] = None):
+                       anchor_strand: Optional[str] = None,
+                       normalisation_label: str = 'per cell-type row'):
     """Cell-type cross-section view: 32 rows (cell types) × bins heatmap,
     averaged across species. Synteny coverage track on top.
     """
@@ -543,7 +558,7 @@ def plot_celltype_view(cell_types: list[str], mat: np.ndarray, coverage: np.ndar
         f'{anchor_label}  {anchor_chrom}:{anchor_pos:,}   '
         f'cell-type cross-section, ±{window_kb:g} kb '
         f'(sum of STEAM-v1 prediction scores across {n_species_used} species, '
-        f'normalised per cell-type row)',
+        f'normalised {normalisation_label})',
         fontsize=9, pad=12,
     )
 
