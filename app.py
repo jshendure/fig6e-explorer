@@ -38,6 +38,11 @@ def cached_gene_lookup(symbol: str):
 
 with st.sidebar:
     st.header('Query')
+    view_mode = st.radio(
+        'View', ['Per-species (locus)', 'Cell-type cross-section'], horizontal=False,
+        help='Per-species: rows are species, one cell type. '
+             'Cell-type cross-section: rows are 32 cell types, signal averaged across species.',
+    )
     if 'mode' not in st.session_state:
         st.session_state['mode'] = 'Gene symbol'
     mode = st.radio(
@@ -62,9 +67,13 @@ with st.sidebar:
         label = st.text_input('Locus label', value='AFP_TSS', max_chars=40)
         gene_sym = None
 
-    cell_type = st.selectbox(
-        'Cell type', core.CELL_TYPES, index=core.CELL_TYPES.index('Hepatocytes'),
-    )
+    if view_mode == 'Per-species (locus)':
+        cell_type = st.selectbox(
+            'Cell type', core.CELL_TYPES, index=core.CELL_TYPES.index('Hepatocytes'),
+        )
+    else:
+        cell_type = 'Hepatocytes'  # placeholder; not used in cross-section view
+        st.caption('Cell type fixed in cross-section view (all 32 are shown).')
     window_kb = st.slider('Window (± kb)', 25, 500, 100, step=25)
     n_species = st.select_slider(
         'Species to fetch (fewer = faster)',
@@ -119,6 +128,25 @@ with st.sidebar:
 # Honour auto_run requested by Top-TFs picker.
 if st.session_state.pop('auto_run', False):
     run = True
+
+
+@st.cache_data(max_entries=10, show_spinner=False, ttl=24 * 3600)
+def cached_signals_multi_ct(chrom: str, pos: int, window_kb: float,
+                            species_tuple: tuple, cell_types_tuple: tuple):
+    """Fetch all (species, cell_type) pairs for the locus."""
+    species = list(species_tuple); cts = list(cell_types_tuple)
+    n = len(species) * len(cts)
+    prog = st.progress(0.0, text=f'Fetching 0/{n} (species × cell-type) tracks…')
+
+    def cb(done, total):
+        prog.progress(done / total, text=f'Fetching {done}/{total} tracks…')
+
+    out = core.fetch_signals_multi_ct(
+        chrom, pos, cts, window_kb=window_kb, bin_kb=0.1,
+        species_list=species, max_workers=64, progress=cb,
+    )
+    prog.empty()
+    return out
 
 
 @st.cache_data(max_entries=20, show_spinner=False, ttl=24 * 3600)
@@ -182,26 +210,49 @@ with st.status('Loading…', expanded=False) as status:
             species_in_tree_order, int(n_species),
             must_include=tuple(s for s in highlight if s in all_species),
         )
-    status.update(label=f'Pulling {len(species_to_fetch)} per-species hg38 tracks…')
-    signals = cached_signals(chrom, int(pos), cell_type, float(window_kb),
-                             tuple(species_to_fetch))
-    status.update(label='Computing synteny + ordering by phylogeny…')
-    syn = core.compute_synteny(signals, bin_bp=100.0, max_gap_kb=10.0)
-    if show_all:
-        retained = syn[syn['coverage_frac'] > 0]['species'].tolist()
+
+    if view_mode == 'Cell-type cross-section':
+        status.update(label=f'Pulling {len(species_to_fetch)}×{len(core.CELL_TYPES)} '
+                              '(species × cell-type) tracks…')
+        signals_mc = cached_signals_multi_ct(
+            chrom, int(pos), float(window_kb),
+            tuple(species_to_fetch), tuple(core.CELL_TYPES),
+        )
+        status.update(label='Aggregating per cell type…')
+        mat_ct, coverage = core.aggregate_celltype_matrix(
+            signals_mc, list(species_to_fetch), list(core.CELL_TYPES),
+        )
+        status.update(label='Rendering figure…')
+        fig = core.plot_celltype_view(
+            list(core.CELL_TYPES), mat_ct, coverage,
+            anchor_label=label or f'{chrom}_{pos}',
+            anchor_chrom=chrom, anchor_pos=int(pos),
+            window_kb=float(window_kb),
+            n_species_used=len(species_to_fetch),
+            anchor_strand=anchor_strand,
+        )
+        syn = None
     else:
-        retained = syn[syn['syntenic_span_kb'] >= min_syn]['species'].tolist()
-    order, tree = core.load_pruned_tree(retained)
-    status.update(label='Rendering figure…')
-    fig = core.plot_fig6e(
-        order, signals, tree,
-        anchor_label=label or f'{chrom}_{pos}',
-        anchor_chrom=chrom, anchor_pos=int(pos),
-        cell_type=cell_type, window_kb=float(window_kb),
-        show_all_species=show_all, min_syntenic_kb=float(min_syn),
-        highlight_species=highlight,
-        anchor_strand=anchor_strand,
-    )
+        status.update(label=f'Pulling {len(species_to_fetch)} per-species hg38 tracks…')
+        signals = cached_signals(chrom, int(pos), cell_type, float(window_kb),
+                                 tuple(species_to_fetch))
+        status.update(label='Computing synteny + ordering by phylogeny…')
+        syn = core.compute_synteny(signals, bin_bp=100.0, max_gap_kb=10.0)
+        if show_all:
+            retained = syn[syn['coverage_frac'] > 0]['species'].tolist()
+        else:
+            retained = syn[syn['syntenic_span_kb'] >= min_syn]['species'].tolist()
+        order, tree = core.load_pruned_tree(retained)
+        status.update(label='Rendering figure…')
+        fig = core.plot_fig6e(
+            order, signals, tree,
+            anchor_label=label or f'{chrom}_{pos}',
+            anchor_chrom=chrom, anchor_pos=int(pos),
+            cell_type=cell_type, window_kb=float(window_kb),
+            show_all_species=show_all, min_syntenic_kb=float(min_syn),
+            highlight_species=highlight,
+            anchor_strand=anchor_strand,
+        )
     status.update(label=f'Done in {time.time() - t0:.1f} s', state='complete')
 
 st.pyplot(fig, use_container_width=True)
@@ -213,18 +264,20 @@ png_buf.seek(0)
 pdf_buf = io.BytesIO()
 fig.savefig(pdf_buf, format='pdf', bbox_inches='tight')
 pdf_buf.seek(0)
-fname_stem = f'fig6e_{label or chrom}_{cell_type}_w{int(window_kb)}kb'
+view_suffix = 'crosssec' if view_mode == 'Cell-type cross-section' else cell_type
+fname_stem = f'fig6e_{label or chrom}_{view_suffix}_w{int(window_kb)}kb'
 col1.download_button('Download PNG', png_buf, file_name=fname_stem + '.png',
                      mime='image/png', use_container_width=True)
 col2.download_button('Download PDF', pdf_buf, file_name=fname_stem + '.pdf',
                      mime='application/pdf', use_container_width=True)
 
-with st.expander(f'Per-species synteny table ({len(syn)} species)'):
-    st.dataframe(
-        syn.reset_index(drop=True).round({'syntenic_span_kb': 1, 'coverage_frac': 3,
-                                          'mean_signal': 3}),
-        use_container_width=True, height=400,
-    )
+if syn is not None:
+    with st.expander(f'Per-species synteny table ({len(syn)} species)'):
+        st.dataframe(
+            syn.reset_index(drop=True).round({'syntenic_span_kb': 1, 'coverage_frac': 3,
+                                              'mean_signal': 3}),
+            use_container_width=True, height=400,
+        )
 
 st.caption(
     'Data: Shendure lab `jax_atac_augmented_241_mammals_hg38` hg38-projected STEAM-v1 '

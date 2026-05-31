@@ -137,6 +137,79 @@ def _fetch_one(species: str, chrom: str, start: int, end: int,
     return np.array([np.nan if v is None else v for v in vals], dtype=float)
 
 
+def fetch_signals_multi_ct(chrom: str, pos: int, cell_types: list[str],
+                           window_kb: float = 100.0, bin_kb: float = 0.1,
+                           species_list: Optional[list[str]] = None,
+                           max_workers: int = 64,
+                           progress: Optional[Callable[[int, int], None]] = None,
+                           ) -> dict[tuple, np.ndarray]:
+    """Fetch hg38-projected signals for many (species, cell_type) pairs.
+
+    Returns dict keyed by (species, cell_type) -> 1D array of length n_bins.
+    """
+    if species_list is None:
+        species_list = list_species()
+    window_bp = int(window_kb * 1000)
+    bin_bp = bin_kb * 1000
+    n_bins = int(round(2 * window_bp / bin_bp))
+    start = max(0, int(pos) - window_bp)
+    end = int(pos) + window_bp
+
+    out: dict[tuple, np.ndarray] = {}
+    tasks = [(sp, ct) for sp in species_list for ct in cell_types]
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(_fetch_one, sp, chrom, start, end, ct, n_bins): (sp, ct)
+                for sp, ct in tasks}
+        done = 0
+        for fut in as_completed(futs):
+            sp, ct = futs[fut]
+            arr = fut.result()
+            if arr is not None and arr.shape == (n_bins,):
+                out[(sp, ct)] = arr
+            done += 1
+            if progress is not None:
+                progress(done, len(futs))
+    return out
+
+
+def aggregate_celltype_matrix(signals: dict[tuple, np.ndarray],
+                              species_list: list[str],
+                              cell_types: list[str]) -> tuple[np.ndarray, np.ndarray]:
+    """Per (cell_type, bin), mean signal across species (NaN → 0 contribution).
+
+    Returns (matrix shape (n_ct, n_bins), per-bin synteny coverage shape (n_bins,)).
+    """
+    n_bins = next(iter(signals.values())).shape[0]
+    n_ct = len(cell_types)
+    sums = np.zeros((n_ct, n_bins))
+    counts = np.zeros((n_ct, n_bins), dtype=int)
+    cov_any = np.zeros(n_bins, dtype=int)
+    cov_total = 0
+    ct_index = {c: i for i, c in enumerate(cell_types)}
+    for (sp, ct), arr in signals.items():
+        ci = ct_index.get(ct)
+        if ci is None:
+            continue
+        m = np.isfinite(arr)
+        sums[ci] += np.where(m, arr, 0)
+        counts[ci] += m.astype(int)
+    # mean across species with data at that bin; if no data, 0.
+    with np.errstate(invalid='ignore', divide='ignore'):
+        mean_mat = np.where(counts > 0, sums / np.maximum(counts, 1), 0.0)
+
+    # Synteny per bin: fraction of species with hg38 coverage at that bin
+    # (averaged across cell types — should be ~identical, but average smooths noise).
+    per_sp_cov = {}
+    for (sp, ct), arr in signals.items():
+        per_sp_cov.setdefault(sp, []).append(np.isfinite(arr))
+    if per_sp_cov:
+        species_cov = np.stack([np.mean(np.stack(v), axis=0) for v in per_sp_cov.values()])
+        coverage = species_cov.mean(axis=0)
+    else:
+        coverage = np.zeros(n_bins)
+    return mean_mat, coverage
+
+
 def fetch_signals(chrom: str, pos: int, cell_type: str,
                   window_kb: float = 100.0, bin_kb: float = 0.1,
                   species_list: Optional[list[str]] = None,
@@ -422,5 +495,85 @@ def plot_fig6e(species_order: list[str],
     cb = fig.colorbar(im, cax=cax, orientation='horizontal')
     cb.set_label('STEAM-v1 phred-like score', fontsize=7, labelpad=2)
     cb.set_ticks([t for t in (0, 10, 20, 30, 40, 50) if t <= vmax + 1e-9])
+    cb.ax.tick_params(labelsize=6, length=2)
+    return fig
+
+
+def plot_celltype_view(cell_types: list[str], mat: np.ndarray, coverage: np.ndarray,
+                       *,
+                       anchor_label: str, anchor_chrom: str, anchor_pos: int,
+                       window_kb: float, n_species_used: int,
+                       anchor_strand: Optional[str] = None,
+                       score_vmax: float = 30.0):
+    """Cell-type cross-section view: 32 rows (cell types) × bins heatmap,
+    averaged across species. Synteny coverage track on top.
+    """
+    n_ct = len(cell_types)
+    n_bins = mat.shape[1]
+    xgrid = np.linspace(-window_kb, window_kb, n_bins)
+
+    base_h = max(5.0, n_ct * 0.18)
+    track_h = 0.75
+    col_w = [3.4]
+    fig_w = 9.2
+    fig = plt.figure(figsize=(fig_w, base_h + track_h + 1.1))
+    gs = fig.add_gridspec(2, 1, height_ratios=[track_h, base_h], hspace=0.06)
+
+    # --- synteny coverage track ---
+    ax_cov = fig.add_subplot(gs[0])
+    ax_cov.fill_between(xgrid, coverage, color='0.6', lw=0)
+    ax_cov.plot(xgrid, coverage, color='black', lw=0.7)
+    ax_cov.set_xlim(-window_kb, window_kb)
+    ax_cov.set_ylim(0, 1)
+    ax_cov.set_xticks([])
+    ax_cov.set_yticks([0, 1])
+    ax_cov.tick_params(labelsize=6, length=2)
+    ax_cov.set_ylabel('synteny\n(frac.\nspecies)', fontsize=6,
+                      rotation=0, ha='right', va='center')
+    ax_cov.spines[['top', 'right']].set_visible(False)
+    ax_cov.set_title(
+        f'{anchor_label}  {anchor_chrom}:{anchor_pos:,}   '
+        f'cell-type cross-section, ±{window_kb:g} kb '
+        f'(mean across {n_species_used} species)',
+        fontsize=9, pad=12,
+    )
+
+    # --- 32 × N_BINS heatmap (raw signal, fixed phred-like vmax) ---
+    ax = fig.add_subplot(gs[1], sharex=ax_cov)
+    cmap = plt.cm.viridis.copy()
+    cmap.set_bad(VIRIDIS_FLOOR)
+    ax.set_facecolor(VIRIDIS_FLOOR)
+    im = ax.imshow(mat, aspect='auto', cmap=cmap, vmin=0, vmax=float(score_vmax),
+                   extent=[-window_kb, window_kb, n_ct - 0.5, -0.5],
+                   interpolation='nearest')
+
+    # TSS line + strand arrow
+    ax.axvline(0, color='white', lw=0.7, ls=':', alpha=0.8)
+    from matplotlib.transforms import blended_transform_factory
+    trans = blended_transform_factory(ax.transData, ax.transAxes)
+    arrow_len_kb = max(8.0, window_kb * 0.12)
+    if anchor_strand in ('+', '-'):
+        dx = arrow_len_kb if anchor_strand == '+' else -arrow_len_kb
+        ax.annotate('', xy=(dx, 1.015), xytext=(0, 1.015), xycoords=trans,
+                    arrowprops=dict(arrowstyle='-|>', color='black',
+                                    lw=0.9, mutation_scale=8),
+                    annotation_clip=False)
+    ax.scatter([0], [1.015], transform=trans, marker='|', s=30,
+               color='black', linewidths=1.2, clip_on=False, zorder=5)
+
+    ax.set_yticks(range(n_ct))
+    ax.set_yticklabels([c.replace('_', ' ') for c in cell_types], fontsize=7)
+    # Re-enable x ticks (sharex with ax_cov suppressed them) and label them.
+    xticks = np.linspace(-window_kb, window_kb, 5)
+    ax.set_xticks(xticks)
+    ax.set_xticklabels([f'{int(t)}' for t in xticks], fontsize=8)
+    ax.set_xlabel(f'distance from {anchor_label} (kb)', fontsize=9)
+    ax.tick_params(axis='y', length=0)
+
+    # Compact horizontal colorbar inset at top-right of the heatmap.
+    cax = ax.inset_axes([0.85, 1.02, 0.14, 0.012])
+    cb = fig.colorbar(im, cax=cax, orientation='horizontal')
+    cb.set_label('mean STEAM-v1 phred-like score', fontsize=7, labelpad=2)
+    cb.set_ticks([0, 10, 20, 30])
     cb.ax.tick_params(labelsize=6, length=2)
     return fig
