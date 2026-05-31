@@ -217,6 +217,21 @@ def aggregate_celltype_matrix(signals: dict[tuple, np.ndarray],
         row_max = m1.max(axis=1, keepdims=True)
         row_max = np.where(row_max > 0, row_max, 1.0)
         norm_mat = m1 / row_max
+    elif normalisation == 'col_residual':
+        # Subtract per-column mean (the "shared baseline" across cell types at this
+        # position); clip negatives; normalise globally so the strongest cell-type
+        # outlier in the view = 1.
+        col_mean = sums.mean(axis=0, keepdims=True)
+        resid = np.clip(sums - col_mean, 0, None)
+        mx = resid.max()
+        norm_mat = resid / mx if mx > 0 else resid
+    elif normalisation == 'col_zscore':
+        # Per-column z-score, clipped at 0, normalised.
+        col_mean = sums.mean(axis=0, keepdims=True)
+        col_std = sums.std(axis=0, keepdims=True) + 1e-9
+        z = np.clip((sums - col_mean) / col_std, 0, None)
+        mx = z.max()
+        norm_mat = z / mx if mx > 0 else z
     else:  # 'global'
         mx = sums.max()
         norm_mat = sums / mx if mx > 0 else sums

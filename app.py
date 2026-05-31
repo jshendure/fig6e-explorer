@@ -83,12 +83,14 @@ with st.sidebar:
     if view_mode == 'Cell-type cross-section':
         norm_choice = st.radio(
             'Heatmap normalisation',
-            ['Per row', 'Per row → per column', 'Per column → per row', 'Global max'],
-            index=1,
-            help=('Per row: each cell-type row scaled to [0,1] by its own max — shows '
-                  'each cell type\'s pattern. Per row → per column: two-stage, '
-                  'highlights which cell type dominates each position. Global max: '
-                  'preserves cross-cell-type magnitudes.'),
+            ['Column z-score', 'Column residual', 'Global max',
+             'Per row', 'Per row → per column'],
+            index=0,
+            help=('Column residual (recommended): at each position subtract the column '
+                  'mean — surfaces cell-type-specific excess. Column z-score: same idea, '
+                  'divided by column std. Global max: preserves cross-cell-type '
+                  'magnitudes. Per row: each row scaled to its own max. Per row → per '
+                  'column: row-equalize then column-normalise.'),
         )
     else:
         norm_choice = 'Per row'
@@ -233,7 +235,8 @@ with st.status('Loading…', expanded=False) as status:
         status.update(label='Aggregating per cell type…')
         norm_map = {'Per row': 'per_row',
                     'Per row → per column': 'row_then_col',
-                    'Per column → per row': 'col_then_row',
+                    'Column residual': 'col_residual',
+                    'Column z-score': 'col_zscore',
                     'Global max': 'global'}
         mat_ct, coverage = core.aggregate_celltype_matrix(
             signals_mc, list(species_to_fetch), list(core.CELL_TYPES),
@@ -243,7 +246,8 @@ with st.status('Loading…', expanded=False) as status:
         norm_label_map = {
             'per_row': 'per cell-type row',
             'row_then_col': 'per row, then per column',
-            'col_then_row': 'per column, then per row',
+            'col_residual': 'as column residual (cell-type excess over column mean)',
+            'col_zscore': 'as column z-score',
             'global': 'by global max',
         }
         fig = core.plot_celltype_view(
