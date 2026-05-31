@@ -175,30 +175,30 @@ def fetch_signals_multi_ct(chrom: str, pos: int, cell_types: list[str],
 def aggregate_celltype_matrix(signals: dict[tuple, np.ndarray],
                               species_list: list[str],
                               cell_types: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    """Per (cell_type, bin), mean signal across species (NaN → 0 contribution).
+    """Per (cell_type, bin): un-phred each species' value to a linear prediction score
+    (``10**(phred/10)``), sum across species (NaN → 0), then divide the whole matrix by
+    its global max so values are in [0, 1].
 
-    Returns (matrix shape (n_ct, n_bins), per-bin synteny coverage shape (n_bins,)).
+    Returns (normalised matrix shape (n_ct, n_bins), per-bin synteny coverage shape (n_bins,)).
     """
     n_bins = next(iter(signals.values())).shape[0]
     n_ct = len(cell_types)
     sums = np.zeros((n_ct, n_bins))
-    counts = np.zeros((n_ct, n_bins), dtype=int)
-    cov_any = np.zeros(n_bins, dtype=int)
-    cov_total = 0
     ct_index = {c: i for i, c in enumerate(cell_types)}
     for (sp, ct), arr in signals.items():
         ci = ct_index.get(ct)
         if ci is None:
             continue
-        m = np.isfinite(arr)
-        sums[ci] += np.where(m, arr, 0)
-        counts[ci] += m.astype(int)
-    # mean across species with data at that bin; if no data, 0.
-    with np.errstate(invalid='ignore', divide='ignore'):
-        mean_mat = np.where(counts > 0, sums / np.maximum(counts, 1), 0.0)
+        # Linearise phred-like score back to an "original prediction" scale, then sum;
+        # NaN bins contribute zero (no synteny → no contribution).
+        with np.errstate(invalid='ignore', over='ignore'):
+            lin = np.where(np.isfinite(arr), np.power(10.0, arr / 10.0), 0.0)
+        sums[ci] += lin
 
-    # Synteny per bin: fraction of species with hg38 coverage at that bin
-    # (averaged across cell types — should be ~identical, but average smooths noise).
+    mx = sums.max()
+    norm_mat = sums / mx if mx > 0 else sums
+
+    # Synteny coverage per bin: fraction of species with hg38 data, averaged over cell types.
     per_sp_cov = {}
     for (sp, ct), arr in signals.items():
         per_sp_cov.setdefault(sp, []).append(np.isfinite(arr))
@@ -207,7 +207,7 @@ def aggregate_celltype_matrix(signals: dict[tuple, np.ndarray],
         coverage = species_cov.mean(axis=0)
     else:
         coverage = np.zeros(n_bins)
-    return mean_mat, coverage
+    return norm_mat, coverage
 
 
 def fetch_signals(chrom: str, pos: int, cell_type: str,
@@ -503,8 +503,7 @@ def plot_celltype_view(cell_types: list[str], mat: np.ndarray, coverage: np.ndar
                        *,
                        anchor_label: str, anchor_chrom: str, anchor_pos: int,
                        window_kb: float, n_species_used: int,
-                       anchor_strand: Optional[str] = None,
-                       score_vmax: float = 30.0):
+                       anchor_strand: Optional[str] = None):
     """Cell-type cross-section view: 32 rows (cell types) × bins heatmap,
     averaged across species. Synteny coverage track on top.
     """
@@ -534,7 +533,7 @@ def plot_celltype_view(cell_types: list[str], mat: np.ndarray, coverage: np.ndar
     ax_cov.set_title(
         f'{anchor_label}  {anchor_chrom}:{anchor_pos:,}   '
         f'cell-type cross-section, ±{window_kb:g} kb '
-        f'(mean across {n_species_used} species)',
+        f'(normalised sum of 10^(phred/10) over {n_species_used} species)',
         fontsize=9, pad=12,
     )
 
@@ -543,7 +542,7 @@ def plot_celltype_view(cell_types: list[str], mat: np.ndarray, coverage: np.ndar
     cmap = plt.cm.viridis.copy()
     cmap.set_bad(VIRIDIS_FLOOR)
     ax.set_facecolor(VIRIDIS_FLOOR)
-    im = ax.imshow(mat, aspect='auto', cmap=cmap, vmin=0, vmax=float(score_vmax),
+    im = ax.imshow(mat, aspect='auto', cmap=cmap, vmin=0, vmax=1.0,
                    extent=[-window_kb, window_kb, n_ct - 0.5, -0.5],
                    interpolation='nearest')
 
@@ -573,7 +572,7 @@ def plot_celltype_view(cell_types: list[str], mat: np.ndarray, coverage: np.ndar
     # Compact horizontal colorbar inset at top-right of the heatmap.
     cax = ax.inset_axes([0.85, 1.02, 0.14, 0.012])
     cb = fig.colorbar(im, cax=cax, orientation='horizontal')
-    cb.set_label('mean STEAM-v1 phred-like score', fontsize=7, labelpad=2)
-    cb.set_ticks([0, 10, 20, 30])
+    cb.set_label('summed prediction score (normalized)', fontsize=7, labelpad=2)
+    cb.set_ticks([0, 0.5, 1.0])
     cb.ax.tick_params(labelsize=6, length=2)
     return fig
