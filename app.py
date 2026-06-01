@@ -321,7 +321,7 @@ with st.status('Loading…', expanded=False) as status:
 
 st.pyplot(fig, use_container_width=True)
 
-col1, col2, _ = st.columns([1, 1, 4])
+col1, col2, col3, _ = st.columns([1, 1, 1.4, 2.6])
 png_buf = io.BytesIO()
 fig.savefig(png_buf, format='png', dpi=200, bbox_inches='tight')
 png_buf.seek(0)
@@ -334,6 +334,16 @@ col1.download_button('Download PNG', png_buf, file_name=fname_stem + '.png',
                      mime='image/png', use_container_width=True)
 col2.download_button('Download PDF', pdf_buf, file_name=fname_stem + '.pdf',
                      mime='application/pdf', use_container_width=True)
+
+# UCSC Genome Browser link for the same window, with the anchor TSS highlighted.
+_ucsc_start = max(1, int(pos) - int(float(window_kb) * 1000))
+_ucsc_end   = int(pos) + int(float(window_kb) * 1000)
+_ucsc_url = (
+    f'https://genome.ucsc.edu/cgi-bin/hgTracks?db=hg38'
+    f'&position={chrom}%3A{_ucsc_start}-{_ucsc_end}'
+    f'&highlight=hg38.{chrom}%3A{int(pos)}-{int(pos)}%23FF0000'
+)
+col3.link_button('View in UCSC Browser ↗', _ucsc_url, use_container_width=True)
 
 if syn is not None:
     with st.expander(f'Per-species synteny table ({len(syn)} species)'):
