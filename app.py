@@ -105,31 +105,75 @@ with st.sidebar:
         p = pathlib.Path('data/tf_top10_per_celltype.tsv')
         return pd.read_csv(p, sep='\t') if p.exists() else None
 
+    @st.cache_data(show_spinner=False)
+    def _load_top10_diff():
+        import pandas as pd, pathlib
+        p = pathlib.Path('data/tf_top10_differential_per_celltype.tsv')
+        return pd.read_csv(p, sep='\t') if p.exists() else None
+
+    @st.cache_data(show_spinner=False)
+    def _load_neighbors():
+        import pandas as pd, pathlib
+        p = pathlib.Path('data/celltype_neighbors.tsv')
+        return pd.read_csv(p, sep='\t') if p.exists() else None
+
     def _pick_top_tf(tf: str):
-        # Callback fires BEFORE widgets are re-instantiated on the next rerun,
-        # so it's safe to write to widget-backed session_state keys here.
         st.session_state['gene_sym_val'] = tf
         st.session_state['mode'] = 'Gene symbol'
         st.session_state['auto_run'] = True
 
     _top = _load_top10()
-    if _top is not None:
-        sub = _top[_top['cell_type'] == cell_type].sort_values('rank').head(10)
+    _top_diff = _load_top10_diff()
+    _nbrs = _load_neighbors()
+    if _top is not None or _top_diff is not None:
+        ranking = st.radio(
+            'Top-TF ranking',
+            ['Cross-celltype specificity', 'Differentiating from similar cell types'],
+            help='Cross-celltype: TFs whose locus is consistently active in this cell '
+                 'type vs. all others. Differentiating: TFs that distinguish this cell '
+                 'type from its 5 closest cousins (good for endothelial / neuronal / '
+                 'epithelial subtype hunting).',
+        )
+        use_diff = ranking.startswith('Differentiating')
         with st.expander(f'💡 Top TFs in {cell_type} (click to render)', expanded=False):
-            st.caption(
-                'Per-TF specificity = average across 30 phylogenetically-spread '
-                'species of (fraction of total accessibility at the TF locus in this '
-                'cell type). Click any to switch the gene symbol + render.'
-            )
-            for _, row in sub.iterrows():
-                st.button(
-                    f"{int(row['rank'])}. {row['tf_symbol']}  "
-                    f"(frac {row['rank_score']:.3f}, τ {row['mean_tau']:.2f})",
-                    key=f"toptf_{cell_type}_{row['tf_symbol']}",
-                    use_container_width=True,
-                    on_click=_pick_top_tf,
-                    args=(row['tf_symbol'],),
+            if use_diff:
+                if _nbrs is not None:
+                    cousins = _nbrs[_nbrs['cell_type'] == cell_type] \
+                                    .sort_values('rank')['neighbor'].tolist()
+                    st.caption(f"Differential vs. 5 nearest cell types: "
+                               f"{', '.join(cousins)}. "
+                               f"Score = mean signal here − mean signal in those.")
+                sub = (_top_diff[_top_diff['cell_type'] == cell_type]
+                       .sort_values('rank').head(10) if _top_diff is not None
+                       else None)
+                if sub is not None and len(sub):
+                    for _, row in sub.iterrows():
+                        st.button(
+                            f"{int(row['rank'])}. {row['tf_symbol']}  "
+                            f"(Δ {row['differential']:+.3f})",
+                            key=f"diff_{cell_type}_{row['tf_symbol']}",
+                            use_container_width=True,
+                            on_click=_pick_top_tf,
+                            args=(row['tf_symbol'],),
+                        )
+                else:
+                    st.caption('No differential table available.')
+            else:
+                st.caption(
+                    'Per-TF specificity = average across 30 species of (fraction '
+                    'of total accessibility at the TF locus in this cell type). '
+                    'Click any to render that TF.'
                 )
+                sub = _top[_top['cell_type'] == cell_type].sort_values('rank').head(10)
+                for _, row in sub.iterrows():
+                    st.button(
+                        f"{int(row['rank'])}. {row['tf_symbol']}  "
+                        f"(frac {row['rank_score']:.3f}, τ {row['mean_tau']:.2f})",
+                        key=f"toptf_{cell_type}_{row['tf_symbol']}",
+                        use_container_width=True,
+                        on_click=_pick_top_tf,
+                        args=(row['tf_symbol'],),
+                    )
 
 # Honour auto_run requested by Top-TFs picker.
 if st.session_state.pop('auto_run', False):
